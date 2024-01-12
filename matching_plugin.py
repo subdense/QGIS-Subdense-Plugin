@@ -21,195 +21,417 @@
  *                                                                         *
  ***************************************************************************/
 """
+# -*- coding: utf-8 -*-
+# ... [Your plugin header and metadata here] ...
+
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction
-
-
-
-# Initialize Qt resources from file resources.py
+from qgis.PyQt.QtWidgets import QAction, QMessageBox, QApplication
 from .resources import *
-# Import the code for the dialog
+
 from .matching_plugin_dialog import MatchingPluginDialog
 import os.path
+from qgis.core import QgsProject, QgsMapLayer, QgsApplication
 
-from qgis.core import QgsProject, QgsMapLayer, QgsWkbTypes
-
+import jpype
+import jpype.imports
+from jpype.types import *
 
 class MatchingPlugin:
     """QGIS Plugin Implementation."""
 
     def __init__(self, iface):
-        """Constructor.
-
-        :param iface: An interface instance that will be passed to this class
-            which provides the hook by which you can manipulate the QGIS
-            application at run time.
-        :type iface: QgsInterface
-        """
-        # Save reference to the QGIS interface
+        """Constructor."""
         self.iface = iface
-        # initialize plugin directory
         self.plugin_dir = os.path.dirname(__file__)
-        # initialize locale
-        locale = QSettings().value('locale/userLocale')[0:2]
-        locale_path = os.path.join(
-            self.plugin_dir,
-            'i18n',
-            'MatchingPlugin_{}.qm'.format(locale))
+        self.first_start = None
+        self.init_locale()
 
+        self.actions = []
+        self.menu = self.tr(u'&Matching Plugin')
+
+    def init_locale(self):
+        locale = QSettings().value('locale/userLocale')[0:2]
+        locale_path = os.path.join(self.plugin_dir, 'i18n', 'MatchingPlugin_{}.qm'.format(locale))
         if os.path.exists(locale_path):
             self.translator = QTranslator()
             self.translator.load(locale_path)
             QCoreApplication.installTranslator(self.translator)
 
-        # Declare instance attributes
-        self.actions = []
-        self.menu = self.tr(u'&Matching Plugin')
-
-        # Check if plugin was started the first time in current QGIS session
-        # Must be set in initGui() to survive plugin reloads
-        self.first_start = None
-
-    # noinspection PyMethodMayBeStatic
     def tr(self, message):
-        """Get the translation for a string using Qt translation API.
-
-        We implement this ourselves since we do not inherit QObject.
-
-        :param message: String for translation.
-        :type message: str, QString
-
-        :returns: Translated version of message.
-        :rtype: QString
-        """
-        # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
         return QCoreApplication.translate('MatchingPlugin', message)
 
-
-    def add_action(
-        self,
-        icon_path,
-        text,
-        callback,
-        enabled_flag=True,
-        add_to_menu=True,
-        add_to_toolbar=True,
-        status_tip=None,
-        whats_this=None,
-        parent=None):
-        """Add a toolbar icon to the toolbar.
-
-        :param icon_path: Path to the icon for this action. Can be a resource
-            path (e.g. ':/plugins/foo/bar.png') or a normal file system path.
-        :type icon_path: str
-
-        :param text: Text that should be shown in menu items for this action.
-        :type text: str
-
-        :param callback: Function to be called when the action is triggered.
-        :type callback: function
-
-        :param enabled_flag: A flag indicating if the action should be enabled
-            by default. Defaults to True.
-        :type enabled_flag: bool
-
-        :param add_to_menu: Flag indicating whether the action should also
-            be added to the menu. Defaults to True.
-        :type add_to_menu: bool
-
-        :param add_to_toolbar: Flag indicating whether the action should also
-            be added to the toolbar. Defaults to True.
-        :type add_to_toolbar: bool
-
-        :param status_tip: Optional text to show in a popup when mouse pointer
-            hovers over the action.
-        :type status_tip: str
-
-        :param parent: Parent widget for the new action. Defaults None.
-        :type parent: QWidget
-
-        :param whats_this: Optional text to show in the status bar when the
-            mouse pointer hovers over the action.
-
-        :returns: The action that was created. Note that the action is also
-            added to self.actions list.
-        :rtype: QAction
-        """
-
+    def add_action(self, icon_path, text, callback, parent=None):
         icon = QIcon(icon_path)
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
-        action.setEnabled(enabled_flag)
-
-        if status_tip is not None:
-            action.setStatusTip(status_tip)
-
-        if whats_this is not None:
-            action.setWhatsThis(whats_this)
-
-        if add_to_toolbar:
-            # Adds plugin icon to Plugins toolbar
-            self.iface.addToolBarIcon(action)
-
-        if add_to_menu:
-            self.iface.addPluginToMenu(
-                self.menu,
-                action)
-
+        self.iface.addToolBarIcon(action)
+        self.iface.addPluginToMenu(self.menu, action)
         self.actions.append(action)
-
         return action
 
     def initGui(self):
-        """Create the menu entries and toolbar icons inside the QGIS GUI."""
-
         icon_path = ':/plugins/matching_plugin/icon.png'
-        self.add_action(
-            icon_path,
-            text=self.tr(u'Matching plugin'),
-            callback=self.run,
-            parent=self.iface.mainWindow())
-
-        # will be set False in run()
+        self.add_action(icon_path, text=self.tr(u'Matching plugin'), callback=self.run, parent=self.iface.mainWindow())
         self.first_start = True
 
-
     def unload(self):
-        """Removes the plugin menu item and icon from QGIS GUI."""
         for action in self.actions:
-            self.iface.removePluginMenu(
-                self.tr(u'&Matching Plugin'),
-                action)
+            self.iface.removePluginMenu(self.tr(u'&Matching Plugin'), action)
             self.iface.removeToolBarIcon(action)
 
-
     def run(self):
-        """Run method that performs all the real work"""
-
-        # Create the dialog with elements (after translation) and keep reference
-        # Only create GUI ONCE in callback, so that it will only load when the plugin is started
-        if self.first_start == True:
+        if self.first_start:
             self.first_start = False
             self.dlg = MatchingPluginDialog()
+            self.setup_icons()
+            self.connect_buttons()
+
+        #self.dlg.mMapLayerComboBoxCoucheAncienne.clear()
+        #self.dlg.mMapLayerComboBoxCoucheRecente.clear()
         
-        # Clear existing items to avoid duplicates
-        self.dlg.mMapLayerComboBoxCoucheAncienne.clear()
-        self.dlg.mMapLayerComboBoxCoucheRecente.clear()
 
-        # Retrieve all polygon layer names
-        layer_names = [l.name() for l in QgsProject.instance().mapLayers().values() if l.type() == QgsMapLayer.VectorLayer and l.geometryType() == QgsWkbTypes.PolygonGeometry]
-
-        # Add polygon layer names to both comboBoxes
-        self.dlg.mMapLayerComboBoxCoucheAncienne.addItems(layer_names)
-        self.dlg.mMapLayerComboBoxCoucheRecente.addItems(layer_names)
-
-        # show the dialog
+        self.update_layer_comboboxes()
+        
         self.dlg.show()
-        # Run the dialog event loop
         result = self.dlg.exec_()
-        # See if OK was pressed
         if result:
-            # Do something useful here - delete the line containing pass and
-            # substitute with your code.
             pass
+
+    def update_layer_comboboxes(self):
+        if self.dlg.mMapLayerComboBoxCoucheAncienne.count() == 0:
+            vector_layers = [layer for layer in QgsProject.instance().mapLayers().values() if layer.type() == QgsMapLayer.VectorLayer]
+            layer_names = [layer.name() for layer in vector_layers]
+            self.dlg.mMapLayerComboBoxCoucheAncienne.addItems(layer_names)
+
+        if self.dlg.mMapLayerComboBoxCoucheRecente.count() == 0:
+            self.dlg.mMapLayerComboBoxCoucheRecente.addItems(layer_names)  # Utilisez la même liste que pour la première combobox
+
+
+    def setup_icons(self):
+        help_icon = QgsApplication.getThemeIcon("mActionHelpContents.svg")
+        save_icon = QgsApplication.getThemeIcon("mActionFileSave.svg")
+        copy_icon = QgsApplication.getThemeIcon("mActionEditCopy.svg")
+        clear_icon = QgsApplication.getThemeIcon("mActionEditClear.svg")
+        
+        self.dlg.HelpButton.setIcon(help_icon)
+        self.dlg.toolBtnSaveLog.setIcon(save_icon)
+        self.dlg.toolBtnCopyLog.setIcon(copy_icon)
+        self.dlg.toolBtnClearLog.setIcon(clear_icon)
+
+    def connect_buttons(self):
+        self.dlg.HelpButton.clicked.connect(self.show_help)
+        self.dlg.CloseButton.clicked.connect(self.close_plugin)
+        self.dlg.RunButton.clicked.connect(self.execute_processing)
+        self.dlg.CancelButton.clicked.connect(self.cancel_processing)
+        self.dlg.toolBtnSaveLog.clicked.connect(self.save_log_to_file)
+        self.dlg.toolBtnCopyLog.clicked.connect(self.copy_log_to_clipboard)
+        self.dlg.toolBtnClearLog.clicked.connect(self.clear_log)
+
+    def show_help(self):
+        QMessageBox.information(self.dlg, "Help", "Instructions pour utiliser ce plugin ...")
+
+    def close_plugin(self):
+        self.dlg.close()
+
+    def execute_processing(self):
+        # Récupérez les couches sélectionnées par l'utilisateur
+        Older_layer = self.dlg.mMapLayerComboBoxCoucheAncienne.currentLayer()
+        Newer_layer = self.dlg.mMapLayerComboBoxCoucheRecente.currentLayer()
+        
+        # Validez les sélections
+        if not Older_layer or not Newer_layer:
+            QMessageBox.warning(self.dlg, "Erreur", "Veuillez sélectionner des couches valides.")
+            return
+        
+        #Older_layer = self.get_layer_by_name(older_layer_name)
+        #print (Older_layer.name())
+        Older_layer_path = Older_layer.dataProvider().dataSourceUri()
+        Newer_layer_path = Newer_layer.dataProvider().dataSourceUri()
+        # Older_layer_uri = Older_layer.dataProvider().uri()
+        # Newer_layer_uri = Newer_layer.dataProvider().uri()
+        # Older_layer_path = Older_layer_uri.connectionInfo()
+        # Newer_layer_path = Newer_layer_uri.connectionInfo()
+        QMessageBox.information(self.dlg, "Succès", f"{Older_layer_path} - {Newer_layer_path}")
+
+        try:
+            # Effectuez l'appariement et la détection des changements
+            self.perform_matching(Older_layer_path, Newer_layer_path)
+            QMessageBox.information(self.dlg, "Succès", "L'appariement et la détection des changements ont été effectués avec succès.")
+        except Exception as e:
+            QMessageBox.critical(self.dlg, "Erreur", f"Une erreur est survenue lors de l'exécution : {e}")
+
+        
+        
+    
+    def get_layer_by_name(self, layer_name):
+        layers = QgsProject.instance().mapLayersByName(layer_name)
+        if layers:
+            print(f"Couche trouvée : {layers[0]}")
+            return layers[0]
+        else:
+            print(f"Couche non trouvée : {layer_name}")
+            return None
+
+    
+    def perform_matching(self, Older_layer_path, Newer_layer_path):
+        try:
+
+            # Boiler plate stuff to start the module
+            import jpype
+            import jpype.imports
+            #from jpype.types import *
+
+            # Launch the JVM
+            jpype.startJVM(#jpype.getDefaultJVMPath(), 
+                        classpath=['/home/MNdim/.local/share/QGIS/QGIS3/profiles/default/python/plugins/matching_plugin/jars/geoxygene-matching-1.10-SNAPSHOT.jar'])
+                        # '-Xms2G', '-Xmx14G')
+
+            print(jpype.getClassPath())
+            
+            
+            # ... [le reste de votre code d'appariement] ...
+            
+            import sys,os
+
+            import shapely
+            from shapely.geometry import LineString
+            from shapely.geometry import Polygon
+            from shapely import from_wkt
+            from osgeo import ogr
+            import geopandas
+            import numpy
+            
+            # import the Java modules
+            from fr.ign.cogit.geoxygene.contrib.appariement.surfaces import ParametresAppSurfaces, AppariementSurfaces
+            from fr.ign.cogit.geoxygene.util.conversion import ShapefileReader
+
+                    
+            # Assurez-vous que les chemins des fichiers shapefile sont valides
+            if not Older_layer_path or not Older_layer_path:
+                raise Exception("Les chemins des fichiers shapefile n'ont pas pu être déterminés.")
+
+            # Parameters of the matching algorithm
+            param = ParametresAppSurfaces()
+            param.surface_min_intersection = 1
+            param.pourcentage_min_intersection = 0.2
+            param.pourcentage_intersection_sur = 0.8
+            param.minimiseDistanceSurfacique = True
+            param.distSurfMaxFinal = 0.6
+            param.completudeExactitudeMinFinal = 0.3
+            param.regroupementOptimal = True
+            param.filtrageFinal = True
+            param.ajoutPetitesSurfaces = True
+            param.seuilPourcentageTaillePetitesSurfaces = 0.1
+            param.persistant = False
+            param.resolutionMin = 1
+            param.resolutionMax = 11
+
+            # param: index of IDs (same for both layers)
+            id_index = 1
+
+            layer1 = Older_layer_path
+            layer2 = Newer_layer_path
+
+            # Extraire le nom de la ville et les années
+            city_name = layer1.split('/')[-1].split('_')[0].upper()
+            year1 = layer1.split('/')[-1].split('_')[-1].replace('.shp', '')
+            year2 = layer2.split('/')[-1].split('_')[-1].replace('.shp', '')
+            QMessageBox.information(self.dlg, "Succès", f"{year1} - {year2}")
+
+
+            # Construire le nom du fichier de sortie
+            output_filename = 'EVOLUTION_BUILDING_' + city_name + '_' + year1 + '_' + year2 + '.shp'
+
+
+            path = layer1.split("/")
+            layer1name = os.path.splitext(path[len(path)-1])[0]
+            path.pop(len(path)-1)
+            path2 = layer2.split("/")
+            layer2name = os.path.splitext(path2[len(path2)-1])[0]
+
+
+
+            try:
+                db1 = ShapefileReader.read(layer1, True)
+                db2 = ShapefileReader.read(layer2, True)
+                
+                crs = geopandas.read_file(layer1).crs
+
+                # hashmap of all features
+                allfeatures = dict()
+
+                # reduce multipolygons into single polygons
+                l1 = list()
+                for feat1 in db1:
+                    for i in range(0,feat1.getGeom().size()):
+                        single_feat = feat1.cloneGeom()
+                        
+                        # Handle potential None value here
+                        attribute = single_feat.getAttributes()[id_index]
+                        currentid = layer1name + "-" + (str(attribute.toString()) if attribute is not None else 'None') + "-" + str(i)
+                        
+                        single_feat.setGeom(feat1.getGeom().get(i))
+                        single_feat.setAttribute(0, currentid) # overwrite unused attr fid
+                        l1.append(single_feat)
+                        allfeatures[currentid] = single_feat
+
+                db1.clear()
+                for f1 in l1:
+                    db1.add(f1)
+
+                l2 = list()
+                for feat2 in db2:
+                    for i in range(0,feat2.getGeom().size()):
+                        single_feat = feat2.cloneGeom()
+                        
+                        # Handle potential None value here
+                        attribute = single_feat.getAttributes()[id_index]
+                        currentid = layer2name + "-" + (str(attribute.toString()) if attribute is not None else 'None') + "-" + str(i)
+                        
+                        single_feat.setGeom(feat2.getGeom().get(i))
+                        single_feat.setAttribute(0, currentid)
+                        l2.append(single_feat)
+                        allfeatures[currentid] = single_feat
+
+                db2.clear()
+                for f2 in l2:
+                    db2.add(f2)
+
+                # call to geoxygene matching algorithm
+                liensPoly = AppariementSurfaces.appariementSurfaces(db1, db2, param)
+                
+
+
+                # construct geopandas data frame
+                attrs = list()
+                geoms = list()
+
+                # to sort links by type
+                features_stable = list()
+                features_split = list()
+                features_merged = list()
+                features_aggregated = list()
+                all_link_targets = set()
+                all_link_sources = set()
+
+                for f in liensPoly:
+                    # 1--1 : stability
+                    if len(f.getObjetsRef())==1 and len(f.getObjetsComp())==1:
+                        features_stable.append(f.getObjetsComp()[0])
+                        all_link_sources.add(f.getObjetsRef()[0].getAttribute(0))
+                        all_link_targets.add(f.getObjetsComp()[0].getAttribute(0))
+
+                    # FIXME add comparison geometries and semantic: ex height: important for densification
+
+                    # 1 -- n : split
+                    if len(f.getObjetsRef())==1 and len(f.getObjetsComp())>1:
+                        for comp in f.getObjetsComp():
+                            features_split.append(comp)
+                            all_link_sources.add(f.getObjetsRef()[0].getAttribute(0))
+                            all_link_targets.add(comp.getAttribute(0))
+
+                    # m -- 1 : merged
+                    if len(f.getObjetsRef())>1 and len(f.getObjetsComp())==1:
+                        for ref in f.getObjetsRef():
+                            features_merged.append(ref)
+                            all_link_sources.add(ref.getAttribute(0))
+                            all_link_targets.add(f.getObjetsComp()[0].getAttribute(0))
+
+                    # m -- n : aggregation
+                    if len(f.getObjetsRef())>1 and len(f.getObjetsComp())>1:
+                        for comp in f.getObjetsComp():
+                            features_aggregated.append(comp)
+                            all_link_targets.add(f.getObjetsComp()[0].getAttribute(0))
+                        for ref in f.getObjetsRef():
+                            all_link_sources.add(f.getObjetsRef()[0].getAttribute(0))
+
+                    # iterate over single links in the multiline
+                    for i in range(0,f.getGeom().size()):
+                        link = "LINESTRING ("+", ".join(list(map(lambda p: str(p.getX())+" "+str(p.getY()),f.getGeom().get(i).coord().getList())))+")"
+                        #print(link)
+                        geoms.append(from_wkt(link))
+                        attrs.append(list(f.getSchema().getColonnes())) # no attributes?
+
+                #print(attrs)
+                links = geopandas.GeoDataFrame({'geometry':geoms}, crs = crs)
+
+                links.to_file('/'.join(path)+'/NEW_MATCHING-LINKS_'+layer1name+"_"+layer2name+'.shp')
+
+                # construct appeared/disappeared layer
+
+                # 1 -- 0
+                features_disappeared = list()
+                for f1 in db1:
+                    if f1.getAttribute(0) not in all_link_sources:
+                        #print(f1.getAttribute(0))
+                        features_disappeared.append(f1)
+
+                # 0 -- 1
+                features_appeared = list()
+                for f2 in db2:
+                    if f2.getAttribute(0) not in all_link_targets:
+                        features_appeared.append(f2)
+
+                #print(features_appeared)
+
+                # export
+                evol_layer = features_appeared+features_disappeared+features_stable+features_split+features_merged+features_aggregated
+                evol_attrs = list(numpy.repeat('appeared',len(features_appeared)))+list(numpy.repeat('disappeared',len(features_disappeared)))+list(numpy.repeat('stable',len(features_stable)))+list(numpy.repeat('split',len(features_split)))+list(numpy.repeat('merged',len(features_merged)))+list(numpy.repeat('aggregated',len(features_aggregated)))
+
+                #evol_polys = [from_wkt("POLYGON (("+", ".join(list(map(lambda p: str(p.getX())+" "+str(p.getY()),x.getGeom().coord().getList())))+"))") for x in evol_layer]
+                evol_polys = []
+                for x in evol_layer:
+                    coordinates = []
+                    for p in x.getGeom().coord().getList():
+                        coordinates.append((p.getX(), p.getY()))
+                    polygon = Polygon(coordinates)
+                    evol_polys.append(polygon)
+
+                evol_ids = [str(x.getAttribute(0)) for x in evol_layer]
+
+                evol = geopandas.GeoDataFrame({'geometry':evol_polys, 'type':evol_attrs, 'id':evol_ids}, crs = crs)
+
+                evol.to_file('/'.join(path)+'/'+output_filename)
+
+            finally:
+                if 'db1' in locals() and hasattr(db1, 'close'):
+                    db1.close()
+                if 'db2' in locals() and hasattr(db2, 'close'):
+                    db2.close()    
+
+
+        except Exception as e:
+            QMessageBox.critical(self.dlg, "Erreur", f"Une erreur est survenue lors de l'exécution : {e}")
+        
+        finally:
+
+            # N'oubliez pas de fermer la JVM une fois que vous avez terminé
+            jpype.shutdownJVM()
+
+        
+    """ def get_shapefile_path(self, layer):
+        # Cette fonction détermine le chemin du fichier shapefile à partir d'un objet de couche QGIS
+        # Note : vous devrez adapter cette fonction pour gérer les différents types de sources de données
+        data_provider = layer.dataProvider()
+        if data_provider.name() == 'ogr':
+            return data_provider.dataSourceUri().split('|')[0]
+        return None """
+    
+    def cancel_processing(self):
+        self.dlg.close()
+
+    def save_log_to_file(self):
+        # Save log to file
+        log_text = self.dlg.txtLog.toPlainText()
+        # ...
+
+    def copy_log_to_clipboard(self):
+        # Get the text from the log widget
+        log_text = self.dlg.txtLog.toPlainText()
+        # Copy the text to clipboard
+        QApplication.clipboard().setText(log_text)
+
+    def clear_log(self):
+        self.dlg.txtLog.clear()
+
